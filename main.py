@@ -6,14 +6,9 @@ import numpy as np
 import time
 
 # =====================================================
-# FUNÇÃO PARA CALCULAR EAR (Eye Aspect Ratio)
+# FUNÇÃO EAR
 # =====================================================
 def calcular_ear(landmarks, indices):
-    """
-    Calcula o Eye Aspect Ratio.
-    Quando o olho fecha, o valor diminui.
-    """
-
     p1 = np.array([landmarks[indices[0]].x, landmarks[indices[0]].y])
     p2 = np.array([landmarks[indices[1]].x, landmarks[indices[1]].y])
     p3 = np.array([landmarks[indices[2]].x, landmarks[indices[2]].y])
@@ -25,12 +20,10 @@ def calcular_ear(landmarks, indices):
     vertical2 = np.linalg.norm(p3 - p5)
     horizontal = np.linalg.norm(p1 - p4)
 
-    ear = (vertical1 + vertical2) / (2.0 * horizontal)
-    return ear
-
+    return (vertical1 + vertical2) / (2.0 * horizontal)
 
 # =====================================================
-# INICIALIZA MEDIAPIPE (API NOVA)
+# MEDIAPIPE
 # =====================================================
 mp_face_landmarker = mp.tasks.vision.FaceLandmarker
 mp_base_options = mp.tasks.BaseOptions
@@ -45,58 +38,74 @@ options = mp.tasks.vision.FaceLandmarkerOptions(
 face_landmarker = mp_face_landmarker.create_from_options(options)
 
 # =====================================================
-# INICIALIZA PYGAME
+# PYGAME
 # =====================================================
 pygame.init()
 screen = pygame.display.set_mode((800, 600))
-pygame.display.set_caption("Avatar Prototype")
-
 clock = pygame.time.Clock()
 
 # =====================================================
-# CARREGA ASSETS
+# ASSETS
 # =====================================================
 
-# Corpo / rosto base
-rosto_frente = pygame.image.load("assets/rosto_frente.png").convert_alpha()
+# PERFIS
 perfil_esq = pygame.image.load("assets/perfil_esq.png").convert_alpha()
 perfil_dir = pygame.image.load("assets/perfil_dir.png").convert_alpha()
 
-# Olhos
+# ROSTO FRENTE (idle animation)
+rosto_base = pygame.image.load("assets/rosto_frente_base.png").convert_alpha()
+rosto_1 = pygame.image.load("assets/rosto_frente_1.png").convert_alpha()
+rosto_2 = pygame.image.load("assets/rosto_frente_2.png").convert_alpha()
+
+idle_frames = [rosto_base, rosto_1, rosto_2]
+idle_index = 0
+idle_timer = 0
+
+# OLHOS
 olho_aberto_esq = pygame.image.load("assets/olho_aberto_esq.png").convert_alpha()
 olho_aberto_dir = pygame.image.load("assets/olho_aberto_dir.png").convert_alpha()
-
 olho_fechado_esq = pygame.image.load("assets/olho_fechado_esq.png").convert_alpha()
 olho_fechado_dir = pygame.image.load("assets/olho_fechado_dir.png").convert_alpha()
 
-# Estado atual
-sprite_atual = rosto_frente
+# SOBRANCELHAS
+sob_neutra_esq = pygame.image.load("assets/sobrancelha_neutra_esq.png").convert_alpha()
+sob_neutra_dir = pygame.image.load("assets/sobrancelha_neutra_dir.png").convert_alpha()
+sob_up_esq = pygame.image.load("assets/sobrancelha_suspresa_esq.png").convert_alpha()
+sob_up_dir = pygame.image.load("assets/sobrancelha_suspresa_dir.png").convert_alpha()
+
+# BOCA
+boca_aberta_sprite = pygame.image.load("assets/boca_aberta.png").convert_alpha()
+
+# =====================================================
+# ESTADOS
+# =====================================================
+sprite_atual = rosto_base
 olho_esq_atual = olho_aberto_esq
 olho_dir_atual = olho_aberto_dir
+sob_esq_atual = sob_neutra_esq
+sob_dir_atual = sob_neutra_dir
+boca_aberta = False
 
 # =====================================================
-# INICIALIZA CÂMERA
+# CAMERA
 # =====================================================
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-
-# =====================================================
-# LOOP PRINCIPAL
-# =====================================================
 running = True
 start_time = time.time()
 
+# =====================================================
+# LOOP
+# =====================================================
 while running:
-    clock.tick(60)
+    dt = clock.tick(60)
+    idle_timer += dt
 
-    # Eventos Pygame
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
-    # Captura frame da câmera
     ret, frame = cap.read()
     if not ret:
-        print("Camera falhou")
         break
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -107,20 +116,14 @@ while running:
     )
 
     timestamp_ms = int((time.time() - start_time) * 1000)
+    results = face_landmarker.detect_for_video(mp_image, timestamp_ms)
 
-    results = face_landmarker.detect_for_video(
-        mp_image,
-        timestamp_ms
-    )
-
-    # =====================================================
-    # PROCESSAMENTO DE LANDMARKS
-    # =====================================================
     if results.face_landmarks:
-
         landmarks = results.face_landmarks[0]
 
-        # --------- ROTACAO DA CABEÇA ---------
+        # =================================================
+        # ROTAÇÃO
+        # =================================================
         left_eye = landmarks[33]
         right_eye = landmarks[263]
         nose = landmarks[1]
@@ -135,60 +138,89 @@ while running:
         elif rotation < -threshold_rot:
             sprite_atual = perfil_esq
         else:
-            sprite_atual = rosto_frente
+            sprite_atual = None  # usando idle animado
 
-        # --------- DETECCAO DE PISCAR (SOMENTE FRENTE) ---------
-        if sprite_atual == rosto_frente:
+        # =================================================
+        # PISCAR
+        # =================================================
+        left_eye_indices = [33,160,158,133,153,144]
+        right_eye_indices = [362,385,387,263,373,380]
 
-            left_eye_indices = [33,160,158,133,153,144]
-            right_eye_indices = [362,385,387,263,373,380]
+        ear_left = calcular_ear(landmarks, left_eye_indices)
+        ear_right = calcular_ear(landmarks, right_eye_indices)
 
-            ear_left = calcular_ear(landmarks, left_eye_indices)
-            ear_right = calcular_ear(landmarks, right_eye_indices)
+        blink_threshold = 0.20
 
-            ear = (ear_left + ear_right) / 2
+        olho_esq_atual = olho_fechado_esq if ear_left < blink_threshold else olho_aberto_esq
+        olho_dir_atual = olho_fechado_dir if ear_right < blink_threshold else olho_aberto_dir
 
-            blink_threshold = 0.20
+        # =================================================
+        # SOBRANCELHA
+        # =================================================
+        sobrancelha_esq = landmarks[70]
+        olho_esq_top = landmarks[159]
+        sobrancelha_dir = landmarks[300]
+        olho_dir_top = landmarks[386]
 
-            if ear < blink_threshold:
-                olho_esq_atual = olho_fechado_esq
-                olho_dir_atual = olho_fechado_dir
-            else:
-                olho_esq_atual = olho_aberto_esq
-                olho_dir_atual = olho_aberto_dir
+        dist_esq = abs(sobrancelha_esq.y - olho_esq_top.y)
+        dist_dir = abs(sobrancelha_dir.y - olho_dir_top.y)
 
-        # --------- DESENHA LANDMARKS NA CAMERA ---------
+        sob_threshold = 0.035
+
+        sob_esq_atual = sob_up_esq if dist_esq > sob_threshold else sob_neutra_esq
+        sob_dir_atual = sob_up_dir if dist_dir > sob_threshold else sob_neutra_dir
+
+        # =================================================
+        # BOCA
+        # =================================================
+        top_lip = landmarks[13]
+        bottom_lip = landmarks[14]
+
+        mouth_open = abs(top_lip.y - bottom_lip.y)
+        boca_aberta = mouth_open > 0.05
+
+        # =================================================
+        # LANDMARKS NA CAMERA
+        # =================================================
         h, w, _ = frame.shape
         for lm in landmarks:
             x = int(lm.x * w)
             y = int(lm.y * h)
             cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
 
-    # Mostra janela da câmera
-    cv2.imshow("Camera Debug", frame)
+    # =====================================================
+    # ANIMAÇÃO IDLE (ROSTO SEMPRE MEXENDO)
+    # =====================================================
+    if sprite_atual is None:
+        if idle_timer > 150:
+            idle_index = (idle_index + 1) % len(idle_frames)
+            idle_timer = 0
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        running = False
+        sprite_atual = idle_frames[idle_index]
 
     # =====================================================
-    # RENDERIZAÇÃO NO PYGAME
+    # RENDER
     # =====================================================
     screen.fill((30, 30, 30))
+    center = rosto_base.get_rect(center=(400, 300))
 
-    center = rosto_frente.get_rect(center=(400, 300))
+    screen.blit(sprite_atual, center)
 
-    if sprite_atual == rosto_frente:
-        screen.blit(rosto_frente, center)
+    if sprite_atual not in [perfil_esq, perfil_dir]:
+        screen.blit(sob_esq_atual, center)
+        screen.blit(sob_dir_atual, center)
         screen.blit(olho_esq_atual, center)
         screen.blit(olho_dir_atual, center)
-    else:
-        screen.blit(sprite_atual, center)
+
+        if boca_aberta:
+            screen.blit(boca_aberta_sprite, center)
 
     pygame.display.flip()
 
-# =====================================================
-# FINALIZAÇÃO
-# =====================================================
+    cv2.imshow("Camera Debug", frame)
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        running = False
+
 cap.release()
 cv2.destroyAllWindows()
 pygame.quit()
